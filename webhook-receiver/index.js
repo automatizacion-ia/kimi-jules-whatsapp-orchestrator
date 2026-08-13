@@ -65,6 +65,7 @@ function validateSecret(req) {
 
 /**
  * Envía un mensaje de WhatsApp.
+ * Intenta resolver LIDs a JIDs reales para evitar errores de envío.
  */
 async function sendWhatsAppMessage(to, text) {
   if (!whatsappClient || !whatsappReady) {
@@ -72,7 +73,21 @@ async function sendWhatsAppMessage(to, text) {
     return;
   }
   try {
-    await whatsappClient.sendMessage(to, text);
+    let target = to;
+    if (to.endsWith('@lid')) {
+      try {
+        const contact = await whatsappClient.getContactById(to);
+        target = contact.id?._serialized || to;
+        console.log(`[WhatsApp] LID ${to} resuelto a ${target}`);
+      } catch (lidErr) {
+        console.warn(`[WhatsApp] No se pudo resolver LID ${to}:`, lidErr.message);
+      }
+    }
+    await Promise.race([
+      whatsappClient.sendMessage(target, text),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('sendMessage timeout')), 15000)),
+    ]);
+    console.log(`[WhatsApp] Mensaje enviado a ${target}`);
   } catch (err) {
     console.error('Error enviando mensaje de WhatsApp:', err.message);
   }
