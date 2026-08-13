@@ -1,10 +1,10 @@
 require('dotenv').config();
 
 const express = require('express');
-const wa = require('@open-wa/wa-automate');
-const { ev } = require('@open-wa/wa-automate');
+const { Client, LocalAuth } = require('whatsapp-web.js');
 const fs = require('fs');
 const path = require('path');
+const qrcode = require('qrcode');
 const { exec } = require('child_process');
 const util = require('util');
 const herdr = require('./herdr-client');
@@ -22,8 +22,9 @@ const app = express();
 app.use(express.json());
 
 let whatsappClient = null;
+let whatsappReady = false;
 const QR_PATH = path.join(__dirname, 'qr.png');
-const SESSION_DIR = path.join(__dirname, `_IGNORE_${SESSION_NAME}`);
+const SESSION_DIR = path.join(__dirname, `.wwebjs_auth_${SESSION_NAME}`);
 
 /**
  * Borra datos de sesión previos para evitar corrupción al re-escanear.
@@ -40,31 +41,16 @@ function cleanSession() {
 }
 
 /**
- * Guarda el QR como imagen PNG y también lo imprime como ASCII en el log.
+ * Guarda el QR como imagen PNG.
  */
-function saveQr(qrcode) {
+async function saveQr(qrString) {
   try {
-    // open-wa suele emitir el QR como data URL base64
-    const base64 = qrcode.replace(/^data:image\/png;base64,/, '');
-    fs.writeFileSync(QR_PATH, Buffer.from(base64, 'base64'));
+    await qrcode.toFile(QR_PATH, qrString, { width: 512 });
     console.log(`[WhatsApp] QR guardado en: ${QR_PATH}`);
   } catch (err) {
     console.error('[WhatsApp] Error guardando QR:', err.message);
   }
 }
-
-// Listeners de eventos QR (varios patrones por compatibilidad)
-ev.on('qr.**', saveQr);
-ev.on('qr', saveQr);
-ev.on('qr.*', saveQr);
-
-ev.on('sessionData.**', (data) => {
-  console.log('[WhatsApp] Datos de sesión recibidos (se guardarán automáticamente)');
-});
-
-ev.on('error.**', (err) => {
-  console.error('[WhatsApp] Evento de error:', err);
-});
 
 /**
  * Valida el secreto del webhook entrante.
@@ -81,12 +67,12 @@ function validateSecret(req) {
  * Envía un mensaje de WhatsApp.
  */
 async function sendWhatsAppMessage(to, text) {
-  if (!whatsappClient) {
+  if (!whatsappClient || !whatsappReady) {
     console.error('WhatsApp client no está listo aún');
     return;
   }
   try {
-    await whatsappClient.sendText(to, text);
+    await whatsappClient.sendMessage(to, text);
   } catch (err) {
     console.error('Error enviando mensaje de WhatsApp:', err.message);
   }
@@ -172,7 +158,7 @@ async function processMessage(from, text) {
 }
 
 /**
- * Endpoint para recibir webhooks de open-wa.
+ * Endpoint para recibir webhooks de WhatsApp.
  */
 app.post('/webhook/whatsapp', async (req, res) => {
   if (!validateSecret(req)) {
@@ -207,49 +193,30 @@ app.post('/send', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', whatsappReady: !!whatsappClient });
+  res.json({ status: 'ok', whatsappReady });
 });
 
 /**
- * Inicia open-wa.
+ * Inicia whatsapp-web.js.
  */
 async function startWhatsApp() {
   // Limpiar sesión previa para evitar corrupción
   cleanSession();
 
   try {
-    whatsappClient = await wa.create({
-      sessionId: SESSION_NAME,
-      multiDevice: true,
-      authTimeout: 120,
-      qrTimeout: 120,
-      headless: true,
-      useChrome: true,
-      blockCrashLogs: true,
-      disableSpins: true,
-      skipUpdateCheck: true,
-      logConsole: false,
-      popup: false,
-      chromiumArgs: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--single-process',
-        '--no-zygote',
-        '--disable-extensions',
-        '--disable-software-rasterizer',
-        '--disable-features=IsolateOrigins,site-per-process',
-        '--disable-site-isolation-trials',
-      ],
-      puppeteerOptions: {
+    whatsappClient = new Client({
+      authStrategy: new LocalAuth({
+        clientId: SESSION_NAME,
+        dataPath: path.join(__dirname, '.wwebjs_auth'),
+      }),
+      puppeteer: {
+        headless: true,
+        executablePath: process.env.CHROME_BIN || '/usr/bin/chromium-browser',
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
           '--disable-gpu',
-          '--single-process',
-          '--no-zygote',
           '--disable-extensions',
           '--disable-software-rasterizer',
           '--disable-features=IsolateOrigins,site-per-process',
@@ -258,19 +225,37 @@ async function startWhatsApp() {
       },
     });
 
-    console.log('[WhatsApp] Cliente listo');
+    whatsappClient.on('qr', async (qr) => {
+      console.log('[WhatsApp] QR recibido, escaneá el código para continuar');
+      await saveQr(qr);
+    });
 
-    // Limpiar QR una vez autenticado
-    if (fs.existsSync(QR_PATH)) {
-      fs.unlinkSync(QR_PATH);
-    }
+    whatsappClient.on('ready', () => {
+      whatsappReady = true;
+      console.log('[WhatsApp] Cliente listo');
+      // Limpiar QR una vez autenticado
+      if (fs.existsSync(QR_PATH)) {
+        fs.unlinkSync(QR_PATH);
+      }
+    });
 
-    whatsappClient.onMessage(async (message) => {
+    whatsappClient.on('auth_failure', (msg) => {
+      console.error('[WhatsApp] Fallo de autenticación:', msg);
+    });
+
+    whatsappClient.on('disconnected', (reason) => {
+      console.log('[WhatsApp] Desconectado:', reason);
+      whatsappReady = false;
+    });
+
+    whatsappClient.on('message_create', async (message) => {
       if (message.fromMe) return;
       await processMessage(message.from, message.body);
     });
+
+    await whatsappClient.initialize();
   } catch (err) {
-    console.error('[WhatsApp] Error iniciando open-wa:', err);
+    console.error('[WhatsApp] Error iniciando whatsapp-web.js:', err);
     process.exit(1);
   }
 }

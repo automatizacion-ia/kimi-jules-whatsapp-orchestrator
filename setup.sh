@@ -32,6 +32,30 @@ apt install -y \
   ncdu \
   unzip
 
+echo "=== Instalando dependencias de Chrome/Puppeteer ==="
+apt install -y \
+  libnss3 \
+  libatk-bridge2.0-0 \
+  libxss1 \
+  libgtk-3-0 \
+  libgbm-dev \
+  libasound2 \
+  fonts-liberation \
+  libappindicator3-1 \
+  xdg-utils
+
+echo "=== Instalando Google Chrome ==="
+if ! command -v google-chrome-stable &> /dev/null; then
+  wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -O /tmp/chrome.deb
+  apt install -y /tmp/chrome.deb || apt-get install -fy
+  rm -f /tmp/chrome.deb
+fi
+
+# symlink para que puppeteer y whatsapp-web.js lo encuentren
+if [ ! -f /usr/bin/chromium-browser ]; then
+  ln -s "$(command -v google-chrome-stable)" /usr/bin/chromium-browser
+fi
+
 echo "=== Instalando Node.js 20 ==="
 if ! command -v node &> /dev/null || [ "$(node -v | cut -d'v' -f2 | cut -d'.' -f1)" != "20" ]; then
   curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
@@ -83,7 +107,13 @@ systemctl start herdr || true
 
 echo "=== Instalando dependencias del webhook ==="
 cd "$REPO_DIR/webhook-receiver"
-npm install
+# Usar Chrome del sistema, no descargar Chromium de puppeteer
+PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true npm install
+
+echo "=== Configurando servicio systemd del webhook-receiver ==="
+cp "$REPO_DIR/systemd/webhook-receiver.service" /etc/systemd/system/webhook-receiver.service
+systemctl daemon-reload
+systemctl enable webhook-receiver || true
 
 echo "=== Configuración inicial completada ==="
 echo ""
@@ -91,7 +121,7 @@ echo "Próximos pasos:"
 echo "1. Copiar .env.example a .env y completar las variables."
 echo "2. Iniciar sesión en Herdr: su - herdr -c 'herdr'"
 echo "3. Crear un pane llamado 'kimi' y correr: kimi"
-echo "4. Iniciar webhook: cd webhook-receiver && npm start"
-echo "5. Escanear el QR de WhatsApp la primera vez."
+echo "4. Iniciar webhook: sudo systemctl start webhook-receiver"
+echo "5. Escanear el QR de WhatsApp la primera vez (se guarda en webhook-receiver/qr.png)."
 echo ""
-echo "Recomendación: configurar el webhook-receiver como servicio systemd."
+echo "Recomendación: revisar los logs con: sudo journalctl -u webhook-receiver -f"

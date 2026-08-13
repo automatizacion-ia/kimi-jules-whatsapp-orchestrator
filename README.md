@@ -5,14 +5,16 @@ Orquestador que corre en una VM de 4 GB con:
 - **Herdr**: runtime persistente para agentes CLI.
 - **Kimi Code CLI**: recibe mensajes de WhatsApp, planifica y responde.
 - **Jules de Google**: ejecuta cambios de código en repositorios de GitHub.
-- **open-wa**: recibe y envía mensajes de WhatsApp Web.
+- **whatsapp-web.js**: recibe y envía mensajes de WhatsApp Web.
+
+> **Nota sobre open-wa:** originalmente se evaluó `@open-wa/wa-automate`, pero la última versión estable (4.76.0) falla contra WhatsApp Web actual porque ya no expone `window.Debug`. Por eso el proyecto usa `whatsapp-web.js`, que es open source y se mantiene actualizado.
 
 ## Arquitectura
 
 ```text
 Usuario de WhatsApp
         ↓
-    open-wa (WhatsApp Web)
+    whatsapp-web.js (WhatsApp Web)
         ↓
    webhook-receiver (Node.js)
         ↓
@@ -24,16 +26,16 @@ Usuario de WhatsApp
 
 ## Requisitos
 
-- VPS con Ubuntu 24.04 (o similar).
-- 4 GB de RAM mínimo.
+- VPS con Ubuntu 22.04/24.04 (o similar).
+- 4 GB de RAM mínimo (recomendado swap de 4 GB).
 - Acceso SSH.
 - Cuenta de GitHub con acceso a la organización `automatizacion-ia`.
 - Jules de Google habilitado en los repos donde va a trabajar.
-- Número de WhatsApp para escanear con open-wa (recomendado secundario).
+- Número de WhatsApp para escanear con whatsapp-web.js (recomendado secundario).
 
 ## Advertencias
 
-- open-wa **no es oficial**. WhatsApp puede banear el número.
+- whatsapp-web.js **no es oficial**. WhatsApp puede banear el número.
 - 4 GB es justo: no corras modelos locales ni Dokploy en la misma VM.
 - Considerá usar WhatsApp Cloud API (oficial) en producción.
 
@@ -103,11 +105,18 @@ cp ../.env .env
 npm start
 ```
 
-Recomendado correr con PM2 o systemd en producción.
+Recomendado correr con systemd en producción:
 
-### 6. Configurar open-wa
+```bash
+sudo cp systemd/webhook-receiver.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable webhook-receiver
+sudo systemctl start webhook-receiver
+```
 
-open-wa se levanta desde el mismo `webhook-receiver`. La primera vez escanear el QR desde la consola. La sesión se guarda en `./session`.
+### 6. Configurar whatsapp-web.js
+
+whatsapp-web.js se levanta desde el mismo `webhook-receiver`. La primera vez escaneá el QR que se guarda en `webhook-receiver/qr.png`. La sesión se guarda en `.wwebjs_auth/`.
 
 ### 7. Configurar GitHub
 
@@ -118,11 +127,11 @@ open-wa se levanta desde el mismo `webhook-receiver`. La primera vez escanear el
 ## Flujo de un mensaje
 
 1. Alguien escribe por WhatsApp.
-2. open-wa recibe y POSTea a `http://localhost:3000/webhook/whatsapp`.
-3. El webhook valida el secreto y le pasa el mensaje a Kimi via Herdr.
+2. whatsapp-web.js recibe el mensaje y lo pasa al webhook-receiver.
+3. El webhook le pasa el mensaje a Kimi via Herdr.
 4. Kimi decide:
    - Responde directo → se envía por WhatsApp.
-   - Necesita código → crea un issue/PR en GitHub con `gh` o la API.
+   - Necesita código → crea un issue/PR en GitHub con `gh`.
 5. Jules de Google detecta el issue/PR y ejecuta el cambio.
 6. Una GitHub Action o webhook puede notificar a Kimi para responder al usuario.
 
@@ -132,9 +141,25 @@ Ver `.env.example`.
 
 ## Troubleshooting
 
-### open-wa consume mucha RAM
+### whatsapp-web.js consume mucha RAM
 
 Verificar flags de Chromium en `webhook-receiver/index.js`. Si sigue alto, considerar swap o WhatsApp Cloud API.
+
+### No aparece el QR
+
+Revisar logs:
+
+```bash
+sudo journalctl -u webhook-receiver -f
+```
+
+Borrar la sesión y reiniciar:
+
+```bash
+sudo systemctl stop webhook-receiver
+sudo rm -rf /opt/kimi-jules-whatsapp-orchestrator/webhook-receiver/.wwebjs_auth
+sudo systemctl start webhook-receiver
+```
 
 ### Herdr no arranca
 
