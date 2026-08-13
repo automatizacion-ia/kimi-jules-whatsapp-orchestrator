@@ -80,9 +80,10 @@ async function sendWhatsAppMessage(to, text) {
 
 /**
  * Crea un issue en GitHub usando gh CLI.
+ * `repo` puede ser solo el nombre (se resuelve contra GITHUB_ORG) o la ruta completa org/repo.
  */
 async function createGitHubIssue(repo, title, body) {
-  const fullRepo = `${GITHUB_ORG}/${repo}`;
+  const fullRepo = repo.includes('/') ? repo : `${GITHUB_ORG}/${repo}`;
   const cmd = `GH_TOKEN="${GITHUB_TOKEN}" gh issue create --repo "${fullRepo}" --title "${title.replace(/"/g, '\\"')}" --body "${body.replace(/"/g, '\\"')}"`;
   try {
     const { stdout } = await execAsync(cmd, { timeout: 15000 });
@@ -112,7 +113,7 @@ async function processMessage(from, text) {
     const targetRepo = repo || GITHUB_DEFAULT_REPO;
 
     if (!targetRepo) {
-      await sendWhatsAppMessage(from, '❌ No configuré un repo por defecto. Usá: /github nombre-repo título del issue');
+      await sendWhatsAppMessage(from, '❌ Faltó el nombre del repo. Usá: /github nombre-repo título del issue. También podés usar /github org/repo título.');
       return;
     }
 
@@ -144,8 +145,8 @@ async function processMessage(from, text) {
 
     await sendWhatsAppMessage(from, response);
 
-    // Si Kimi menciona que necesita Jules, crear issue automáticamente
-    if (response.toLowerCase().includes('jules') || response.toLowerCase().includes('github')) {
+    // Si Kimi menciona que necesita Jules y hay un repo por defecto, crear issue automáticamente
+    if (GITHUB_DEFAULT_REPO && (response.toLowerCase().includes('jules') || response.toLowerCase().includes('github'))) {
       const result = await createGitHubIssue(GITHUB_DEFAULT_REPO, `Tarea derivada de WhatsApp: ${text.slice(0, 50)}`, `Solicitud original: ${text}`);
       if (result.ok) {
         await sendWhatsAppMessage(from, `🚀 También creé un issue para Jules: ${result.url}`);
