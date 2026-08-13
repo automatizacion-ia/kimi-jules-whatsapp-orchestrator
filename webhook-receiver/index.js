@@ -251,7 +251,13 @@ async function startWhatsApp() {
 
     whatsappClient.on('message_create', async (message) => {
       if (message.fromMe) return;
-      await processMessage(message.from, message.body);
+      // Ignorar estados de WhatsApp y broadcasts
+      if (message.from === 'status@broadcast' || message.id?.remote === 'status@broadcast') {
+        return;
+      }
+      // Usar el chat real si está disponible; de lo contrario el from del mensaje
+      const chatId = message.from;
+      await processMessage(chatId, message.body || '');
     });
 
     await whatsappClient.initialize();
