@@ -10,11 +10,14 @@ package-lock.json
 yarn.lock
 pnpm-lock.yaml
 
-# open-wa
+# open-wa / whatsapp-web.js
 .session/
 session/
 tokens/
 *.session
+.wwebjs_auth/
+wwebjs_auth*
+qr.png
 
 # Logs
 logs/
