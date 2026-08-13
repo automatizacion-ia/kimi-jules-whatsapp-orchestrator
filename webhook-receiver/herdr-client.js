@@ -3,80 +3,58 @@ const util = require('util');
 
 const execAsync = util.promisify(exec);
 
-const WORKSPACE = process.env.HERDR_WORKSPACE || 'main';
-const PANE_KIMI = process.env.HERDR_PANE_KIMI || 'kimi';
+const PANE_KIMI = process.env.HERDR_PANE_KIMI || 'w1:p1';
 
 /**
- * Envía un mensaje al pane de Kimi dentro de Herdr.
- * NOTA: el comando exacto depende de la versión de Herdr.
- * Ajustá según `herdr --help` en la VM.
+ * Ejecuta un comando de Herdr.
+ * El servicio corre como usuario 'herdr' con HOME=/var/lib/herdr,
+ * por lo que herdr CLI encuentra el socket automáticamente.
+ */
+async function herdr(command) {
+  const fullCmd = `herdr ${command}`;
+  const { stdout, stderr } = await execAsync(fullCmd, {
+    timeout: 15000,
+    env: {
+      ...process.env,
+      // Asegurar que herdr CLI encuentre el socket del server
+      HOME: process.env.HERDR_HOME || '/var/lib/herdr',
+      PATH: `${process.env.PATH}:/usr/local/bin:/root/.local/bin`,
+    },
+  });
+
+  if (stderr && !stderr.includes('warning')) {
+    // Algunos comandos imprimen info en stderr
+    console.warn('[herdr stderr]', stderr);
+  }
+  return stdout;
+}
+
+/**
+ * Envía un mensaje al pane de Kimi dentro de Herdr y presiona Enter.
  */
 async function sendToKimi(message) {
+  // Escapar comillas dobles para el shell
   const sanitized = message.replace(/"/g, '\\"');
-
-  // Intentos con distintos comandos posibles de Herdr.
-  const candidates = [
-    `herdr send --workspace "${WORKSPACE}" --pane "${PANE_KIMI}" "${sanitized}"`,
-    `herdr send --pane "${PANE_KIMI}" "${sanitized}"`,
-    `herdr send "${PANE_KIMI}" "${sanitized}"`,
-    `herdr send-keys --workspace "${WORKSPACE}" --pane "${PANE_KIMI}" "${sanitized}"`,
-    `herdr type --workspace "${WORKSPACE}" --pane "${PANE_KIMI}" "${sanitized}"`,
-  ];
-
-  for (const cmd of candidates) {
-    try {
-      const { stdout, stderr } = await execAsync(cmd, { timeout: 10000 });
-      if (stderr && stderr.toLowerCase().includes('error')) continue;
-      return { ok: true, cmd, stdout, stderr };
-    } catch (err) {
-      // Probar siguiente comando
-    }
-  }
-
-  throw new Error(`No se pudo enviar mensaje a Kimi. Probá los comandos manualmente con: herdr --help`);
+  return herdr(`pane run "${PANE_KIMI}" "${sanitized}"`);
 }
 
 /**
- * Captura el output del pane de Kimi.
- * NOTA: el comando exacto depende de la versión de Herdr.
+ * Captura el output reciente del pane de Kimi.
  */
-async function captureKimiOutput(lines = 50) {
-  const candidates = [
-    `herdr capture --workspace "${WORKSPACE}" --pane "${PANE_KIMI}" --lines ${lines}`,
-    `herdr capture --pane "${PANE_KIMI}" --lines ${lines}`,
-    `herdr capture "${PANE_KIMI}"`,
-    `herdr print --workspace "${WORKSPACE}" --pane "${PANE_KIMI}"`,
-  ];
-
-  for (const cmd of candidates) {
-    try {
-      const { stdout, stderr } = await execAsync(cmd, { timeout: 10000 });
-      if (stderr && stderr.toLowerCase().includes('error')) continue;
-      return stdout || stderr;
-    } catch (err) {
-      // Probar siguiente comando
-    }
-  }
-
-  throw new Error(`No se pudo capturar output de Kimi. Probá los comandos manualmente con: herdr --help`);
+async function captureKimiOutput(lines = 80) {
+  return herdr(`pane read "${PANE_KIMI}" --lines ${lines}`);
 }
 
 /**
- * Envía un comando directo al pane de Kimi y presiona Enter.
+ * Envía texto literal al pane de Kimi (sin presionar Enter).
  */
-async function sendCommandToKimi(command) {
-  // Primero envía el comando como texto
-  await sendToKimi(command);
-  // Luego envía Enter
-  try {
-    await execAsync(`herdr send-keys --workspace "${WORKSPACE}" --pane "${PANE_KIMI}" "Return"`, { timeout: 5000 });
-  } catch (err) {
-    // Algunas versiones no necesitan send-keys separado
-  }
+async function sendTextToKimi(text) {
+  const sanitized = text.replace(/"/g, '\\"');
+  return herdr(`pane send-text "${PANE_KIMI}" "${sanitized}"`);
 }
 
 module.exports = {
   sendToKimi,
-  sendCommandToKimi,
+  sendTextToKimi,
   captureKimiOutput,
 };
