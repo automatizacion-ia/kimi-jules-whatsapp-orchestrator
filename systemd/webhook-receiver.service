@@ -1,0 +1,18 @@
+[Unit]
+Description=Kimi + Jules WhatsApp webhook receiver
+After=network.target herdr.service
+Requires=herdr.service
+
+[Service]
+Type=simple
+User=herdr
+Group=herdr
+WorkingDirectory=/opt/kimi-jules-whatsapp-orchestrator/webhook-receiver
+Environment="HOME=/var/lib/herdr"
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+ExecStart=/usr/bin/node index.js
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
