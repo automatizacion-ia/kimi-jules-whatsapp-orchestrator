@@ -2,6 +2,9 @@ require('dotenv').config();
 
 const express = require('express');
 const wa = require('@open-wa/wa-automate');
+const { ev } = require('@open-wa/wa-automate');
+const fs = require('fs');
+const path = require('path');
 const { exec } = require('child_process');
 const util = require('util');
 const herdr = require('./herdr-client');
@@ -18,6 +21,20 @@ const app = express();
 app.use(express.json());
 
 let whatsappClient = null;
+
+/**
+ * Captura el QR de WhatsApp y lo guarda como imagen.
+ */
+const QR_PATH = path.join(__dirname, 'qr.png');
+ev.on('qr.', (qrcode) => {
+  try {
+    const base64 = qrcode.replace('data:image/png;base64,', '');
+    fs.writeFileSync(QR_PATH, Buffer.from(base64, 'base64'));
+    console.log(`[WhatsApp] QR guardado en: ${QR_PATH}`);
+  } catch (err) {
+    console.error('[WhatsApp] Error guardando QR:', err.message);
+  }
+});
 
 /**
  * Valida el secreto del webhook entrante.
