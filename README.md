@@ -124,6 +124,28 @@ whatsapp-web.js se levanta desde el mismo `webhook-receiver`. La primera vez esc
 - Agregarlo en `.env` como `GITHUB_TOKEN`.
 - Habilitar Jules de Google en los repositorios objetivo.
 
+### 8. Configurar webhook de GitHub para notificaciones
+
+Para que Kimi te avise cuando alguien crea un issue o PR:
+
+1. Completá en `.env`:
+   - `ADMIN_WHATSAPP_NUMBER`: tu número de WhatsApp (ej. `584120787255@c.us`).
+   - `GITHUB_WEBHOOK_SECRET`: un secreto largo y aleatorio.
+
+2. En cada repo de GitHub que querés monitorear, andá a **Settings → Webhooks → Add webhook**:
+   - **Payload URL**: `http://209.240.111.199:3001/webhook/github`
+   - **Content type**: `application/json`
+   - **Secret**: el mismo valor de `GITHUB_WEBHOOK_SECRET`.
+   - **Which events?**: seleccioná "Let me select individual events" y marcá **Issues** y **Pull requests**.
+
+3. Cuando llegue un issue o PR, Kimi te va a enviar un mensaje de WhatsApp con:
+   - Qué pide.
+   - Cómo se podría resolver.
+   - Posibles impedimentos.
+   - Si es pertinente o no.
+
+4. Respondé **si** para que le avise a Jules, o **no** para ignorarlo.
+
 ## Flujo de un mensaje
 
 1. Alguien escribe por WhatsApp.

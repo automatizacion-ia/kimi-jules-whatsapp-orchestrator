@@ -13,6 +13,7 @@ Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 ExecStart=/usr/bin/node index.js
 Restart=always
 RestartSec=10
+TimeoutStopSec=15
 
 [Install]
 WantedBy=multi-user.target
