@@ -25,7 +25,12 @@ if ! herdr pane list 2>/dev/null | grep -q "w1:p1"; then
   echo "Creando workspace y pane de Kimi..."
   herdr workspace create --label w1 2>/dev/null || true
   sleep 2
-  herdr pane run w1:p1 /root/.kimi-code/bin/kimi 2>/dev/null || true
+  # Inicia bash en el pane y luego envia el comando kimi
+  herdr pane run w1:p1 bash 2>/dev/null || true
+  sleep 2
+  herdr pane send-text w1:p1 kimi 2>/dev/null || true
+  sleep 1
+  herdr pane send-keys w1:p1 Enter 2>/dev/null || true
 fi
 
 # Ejecuta el comando recibido
