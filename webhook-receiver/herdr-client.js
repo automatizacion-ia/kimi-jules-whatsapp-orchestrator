@@ -17,7 +17,7 @@ async function herdr(command) {
     env: {
       ...process.env,
       // Asegurar que herdr CLI encuentre el socket del server
-      HOME: process.env.HERDR_HOME || '/var/lib/herdr',
+      HOME: process.env.HOME || '/root',
       PATH: `${process.env.PATH}:/usr/local/bin:/root/.local/bin`,
     },
   });
