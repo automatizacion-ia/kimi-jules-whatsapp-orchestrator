@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const qrcode = require('qrcode');
+const qrcodeTerminal = require('qrcode-terminal');
 const { exec } = require('child_process');
 const util = require('util');
 const herdr = require('./herdr-client');
@@ -47,12 +48,15 @@ function cleanSession() {
 }
 
 /**
- * Guarda el QR como imagen PNG.
+ * Guarda el QR como imagen PNG y lo imprime en terminal.
  */
 async function saveQr(qrString) {
   try {
     await qrcode.toFile(QR_PATH, qrString, { width: 512 });
     console.log(`[WhatsApp] QR guardado en: ${QR_PATH}`);
+    console.log('\n📱 Escanea este QR con WhatsApp:\n');
+    qrcodeTerminal.generate(qrString, { small: true });
+    console.log('\n');
   } catch (err) {
     console.error('[WhatsApp] Error guardando QR:', err.message);
   }
