@@ -3,11 +3,12 @@ const util = require('util');
 
 const execAsync = util.promisify(exec);
 
-const PANE_KIMI = process.env.HERDR_PANE_KIMI || 'w1:p1';
+// Detecta el pane de Kimi automáticamente o usa HERDR_PANE_KIMI
+let PANE_KIMI = process.env.HERDR_PANE_KIMI || '';
 
 /**
  * Ejecuta un comando de Herdr.
- * El servicio corre como usuario 'herdr' con HOME=/var/lib/herdr,
+ * El servicio corre como usuario 'root' con HOME=/root,
  * por lo que herdr CLI encuentra el socket automáticamente.
  */
 async function herdr(command) {
@@ -30,19 +31,40 @@ async function herdr(command) {
 }
 
 /**
+ * Detecta el pane actual de Kimi.
+ */
+async function detectKimiPane() {
+  if (PANE_KIMI) return PANE_KIMI;
+  try {
+    const output = await herdr('workspace list');
+    const data = JSON.parse(output);
+    const workspace = data.result?.workspaces?.[0];
+    if (workspace) {
+      PANE_KIMI = `${workspace.workspace_id}:p1`;
+      return PANE_KIMI;
+    }
+  } catch (err) {
+    console.error('[herdr] Error detectando pane:', err.message);
+  }
+  return 'w1:p1';
+}
+
+/**
  * Envía un mensaje al pane de Kimi dentro de Herdr y presiona Enter.
  */
 async function sendToKimi(message) {
+  const pane = await detectKimiPane();
   // Escapar comillas dobles para el shell
   const sanitized = message.replace(/"/g, '\\"');
-  return herdr(`pane run "${PANE_KIMI}" "${sanitized}"`);
+  return herdr(`pane run "${pane}" "${sanitized}"`);
 }
 
 /**
  * Captura el output reciente del pane de Kimi.
  */
 async function captureKimiOutput(lines = 80) {
-  return herdr(`pane read "${PANE_KIMI}" --lines ${lines}`);
+  const pane = await detectKimiPane();
+  return herdr(`pane read "${pane}" --lines ${lines}`);
 }
 
 /**
@@ -111,8 +133,9 @@ function extractKimiResponse(rawOutput) {
  * Envía texto literal al pane de Kimi (sin presionar Enter).
  */
 async function sendTextToKimi(text) {
+  const pane = await detectKimiPane();
   const sanitized = text.replace(/"/g, '\\"');
-  return herdr(`pane send-text "${PANE_KIMI}" "${sanitized}"`);
+  return herdr(`pane send-text "${pane}" "${sanitized}"`);
 }
 
 module.exports = {
