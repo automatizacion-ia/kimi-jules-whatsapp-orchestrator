@@ -39,6 +39,9 @@ RUN ln -sf "$(command -v google-chrome-stable)" /usr/bin/chromium-browser
 # Instala Herdr
 RUN curl -fsSL https://herdr.dev/install.sh | sh
 
+# Instala Kimi Code CLI
+RUN curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash
+
 # Crea usuario herdr
 RUN useradd -m -s /bin/bash herdr \
     && usermod -aG sudo herdr
