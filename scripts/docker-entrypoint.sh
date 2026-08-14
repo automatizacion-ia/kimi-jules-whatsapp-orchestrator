@@ -19,5 +19,14 @@ fi
 # Espera a que herdr esté listo
 sleep 5
 
+# Crea workspace y pane de Kimi si no existen
+export PATH="/root/.kimi-code/bin:/root/.local/bin:$PATH"
+if ! herdr pane list 2>/dev/null | grep -q "w1:p1"; then
+  echo "Creando workspace y pane de Kimi..."
+  herdr workspace create --label w1 2>/dev/null || true
+  sleep 2
+  herdr pane run w1:p1 /root/.kimi-code/bin/kimi 2>/dev/null || true
+fi
+
 # Ejecuta el comando recibido
 exec "$@"
