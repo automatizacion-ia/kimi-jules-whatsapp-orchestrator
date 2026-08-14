@@ -12,7 +12,8 @@ fi
 # Inicia herdr en background si no está corriendo
 if ! pgrep -f "herdr" > /dev/null; then
   echo "Iniciando herdr..."
-  su - herdr -c "herdr server" &
+  export PATH="/root/.local/bin:$PATH"
+  herdr server &
 fi
 
 # Espera a que herdr esté listo
