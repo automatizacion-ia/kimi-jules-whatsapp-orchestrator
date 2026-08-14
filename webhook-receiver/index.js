@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const express = require('express');
 const { Client, LocalAuth } = require('whatsapp-web.js');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const qrcode = require('qrcode');
@@ -13,10 +14,12 @@ const execAsync = util.promisify(exec);
 
 const PORT = process.env.WEBHOOK_PORT || 3000;
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
+const GITHUB_WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET || '';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
 const GITHUB_ORG = process.env.GITHUB_ORG || 'automatizacion-ia';
 const GITHUB_DEFAULT_REPO = process.env.GITHUB_DEFAULT_REPO || '';
-const SESSION_NAME = process.env.OPEN_WA_SESSION_NAME || 'mfco-session';
+const ADMIN_WHATSAPP_NUMBER = process.env.ADMIN_WHATSAPP_NUMBER || '';
+const SESSION_NAME = process.env.WHATSAPP_SESSION_NAME || 'mfco-session';
 
 const app = express();
 app.use(express.json());
@@ -25,6 +28,9 @@ let whatsappClient = null;
 let whatsappReady = false;
 const QR_PATH = path.join(__dirname, 'qr.png');
 const SESSION_DIR = path.join(__dirname, `.wwebjs_auth_${SESSION_NAME}`);
+
+// Aprobaciones pendientes de issues/PRs de GitHub
+const pendingApprovals = new Map();
 
 /**
  * Borra datos de sesión previos para evitar corrupción al re-escanear.
@@ -61,6 +67,23 @@ function validateSecret(req) {
     return false;
   }
   return true;
+}
+
+/**
+ * Valida la firma de un webhook de GitHub.
+ */
+function validateGitHubSignature(req) {
+  if (!GITHUB_WEBHOOK_SECRET) return true;
+  const signature = req.headers['x-hub-signature-256'];
+  if (!signature) return false;
+  const hmac = crypto.createHmac('sha256', GITHUB_WEBHOOK_SECRET);
+  hmac.update(JSON.stringify(req.body));
+  const digest = `sha256=${hmac.digest('hex')}`;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(digest));
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -109,6 +132,80 @@ async function createGitHubIssue(repo, title, body) {
 }
 
 /**
+ * Agrega un comentario a un issue o PR de GitHub.
+ */
+async function commentOnGitHub(fullRepo, number, body) {
+  const cmd = `GH_TOKEN="${GITHUB_TOKEN}" gh issue comment "${number}" --repo "${fullRepo}" --body "${body.replace(/"/g, '\\"')}"`;
+  try {
+    await execAsync(cmd, { timeout: 15000 });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Envía un prompt a Kimi y devuelve su respuesta limpia.
+ */
+async function askKimi(prompt) {
+  await herdr.sendToKimi(prompt);
+  const waitTime = parseInt(process.env.KIMI_RESPONSE_TIMEOUT_MS, 10) || 30000;
+  await new Promise((resolve) => setTimeout(resolve, waitTime));
+  const output = await herdr.captureKimiOutput(120);
+  return herdr.extractKimiResponse(output) || 'Kimi no generó una respuesta visible.';
+}
+
+/**
+ * Analiza un issue o PR de GitHub con Kimi.
+ */
+async function analyzeGitHubItem(type, repo, number, title, body, author) {
+  const prompt = `Analizá este ${type} de GitHub en español y responde de forma concisa:
+
+Repo: ${repo}
+Número: #${number}
+Autor: ${author}
+Título: ${title}
+Cuerpo: ${body || '(sin descripción)'}
+
+Respondé exactamente con estos 4 puntos numerados:
+1. Qué pide o qué problema resuelve.
+2. Cómo se podría implementar o arreglar.
+3. Posibles impedimentos o riesgos.
+4. Si es pertinente aplicarlo o por qué no lo sería.`;
+
+  return askKimi(prompt);
+}
+
+/**
+ * Notifica al administrador por WhatsApp sobre un issue/PR nuevo.
+ */
+async function notifyAdminAboutGitHubItem(type, fullRepo, number, title, url, analysis) {
+  if (!ADMIN_WHATSAPP_NUMBER) {
+    console.log('[GitHub] ADMIN_WHATSAPP_NUMBER no configurado, no se envía notificación');
+    return;
+  }
+
+  const itemType = type === 'pull_request' ? 'Pull request' : 'Issue';
+  const approvalId = `${fullRepo}#${number}`;
+
+  const message = [
+    `🔔 Nuevo ${itemType.toLowerCase()} en *${fullRepo}*`,
+    ``,
+    `*#${number}:* ${title}`,
+    `*URL:* ${url}`,
+    ``,
+    `*Análisis de Kimi:*`,
+    analysis,
+    ``,
+    `¿Querés que se lo asigne a Jules?`,
+    `Respondé: *si* para aprobar, *no* para rechazar.`,
+    `ID: ${approvalId}`,
+  ].join('\n');
+
+  await sendWhatsAppMessage(ADMIN_WHATSAPP_NUMBER, message);
+}
+
+/**
  * Procesa un mensaje entrante de WhatsApp.
  */
 async function processMessage(from, text) {
@@ -117,6 +214,18 @@ async function processMessage(from, text) {
   // Ignorar mensajes del propio bot o de grupos
   if (from.includes('@g.us')) {
     console.log('[WhatsApp] Ignorando mensaje de grupo');
+    return;
+  }
+
+  const lowerText = text.toLowerCase().trim();
+
+  // Respuesta a aprobación de issue/PR
+  if (lowerText === 'si' || lowerText === 'sí' || lowerText === 'aprobar' || lowerText === 'ok') {
+    await handleApproval(from, true);
+    return;
+  }
+  if (lowerText === 'no' || lowerText === 'rechazar' || lowerText === 'cancelar') {
+    await handleApproval(from, false);
     return;
   }
 
@@ -145,19 +254,7 @@ async function processMessage(from, text) {
   await sendWhatsAppMessage(from, '⏳ Procesando con Kimi...');
 
   try {
-    // Enviar el mensaje al pane de Kimi
-    await herdr.sendToKimi(text);
-
-    // Darle tiempo a Kimi para responder (ajustable)
-    const waitTime = parseInt(process.env.KIMI_RESPONSE_TIMEOUT_MS, 10) || 30000;
-    await new Promise((resolve) => setTimeout(resolve, waitTime));
-
-    // Capturar respuesta
-    const output = await herdr.captureKimiOutput(80);
-
-    // Limpiar output (opcional)
-    const response = output.trim() || 'Kimi no generó una respuesta visible.';
-
+    const response = await askKimi(text);
     await sendWhatsAppMessage(from, response);
 
     // Si Kimi menciona que necesita Jules y hay un repo por defecto, crear issue automáticamente
@@ -170,6 +267,35 @@ async function processMessage(from, text) {
   } catch (err) {
     console.error('Error procesando mensaje:', err);
     await sendWhatsAppMessage(from, `❌ Error: ${err.message}`);
+  }
+}
+
+/**
+ * Maneja la aprobación o rechazo del último issue/PR notificado.
+ */
+async function handleApproval(from, approved) {
+  if (pendingApprovals.size === 0) {
+    await sendWhatsAppMessage(from, 'No tengo ningún issue o PR pendiente de aprobación.');
+    return;
+  }
+
+  // Tomar el más reciente
+  const [approvalId, item] = Array.from(pendingApprovals.entries()).pop();
+  pendingApprovals.delete(approvalId);
+
+  if (approved) {
+    const mention = item.type === 'pull_request'
+      ? `@jules revisá este PR y aplicá los cambios si corresponde.`
+      : `@jules implementá esto según el análisis.`;
+
+    const result = await commentOnGitHub(item.fullRepo, item.number, mention);
+    if (result.ok) {
+      await sendWhatsAppMessage(from, `✅ Le avisé a Jules en ${approvalId}.`);
+    } else {
+      await sendWhatsAppMessage(from, `❌ No pude asignarle a Jules: ${result.error}`);
+    }
+  } else {
+    await sendWhatsAppMessage(from, `🚫 Ok, no le digo nada a Jules sobre ${approvalId}.`);
   }
 }
 
@@ -189,6 +315,47 @@ app.post('/webhook/whatsapp', async (req, res) => {
   // Responder rápido al webhook y procesar asíncrono
   res.json({ status: 'received' });
   await processMessage(from, body);
+});
+
+/**
+ * Endpoint para recibir webhooks de GitHub (issues y pull requests).
+ */
+app.post('/webhook/github', async (req, res) => {
+  if (!validateGitHubSignature(req)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const event = req.headers['x-github-event'];
+  const payload = req.body || {};
+
+  if ((event === 'issues' && payload.action === 'opened') || (event === 'pull_request' && payload.action === 'opened')) {
+    const item = event === 'issues' ? payload.issue : payload.pull_request;
+    if (!item) {
+      return res.status(400).json({ error: 'Missing issue/PR data' });
+    }
+
+    const fullRepo = payload.repository?.full_name || '';
+    const number = item.number;
+    const title = item.title || '';
+    const bodyText = item.body || '';
+    const url = item.html_url || '';
+    const author = item.user?.login || 'desconocido';
+    const type = event === 'issues' ? 'issue' : 'pull_request';
+
+    res.json({ status: 'received' });
+
+    try {
+      const analysis = await analyzeGitHubItem(type, fullRepo, number, title, bodyText, author);
+      const approvalId = `${fullRepo}#${number}`;
+      pendingApprovals.set(approvalId, { type, fullRepo, number, title, url, analysis });
+      await notifyAdminAboutGitHubItem(type, fullRepo, number, title, url, analysis);
+    } catch (err) {
+      console.error('[GitHub] Error procesando webhook:', err);
+    }
+    return;
+  }
+
+  res.json({ status: 'ignored' });
 });
 
 /**
